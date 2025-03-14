@@ -1,0 +1,190 @@
+import os
+import json
+import random
+import itertools
+from fpdf import FPDF
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+# =============================================
+# COSTANTI GLOBALI (Configurazione modificabile)
+# =============================================
+DATA_INIZIO = datetime(2025, 3, 17)
+GIORNI_SETTIMANA = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", 
+                   "Venerdì", "Sabato", "Domenica"]
+MAX_MATCH_PER_GIORNO = 5
+NOME_TORNEO = "PADEL DEI PAPI"
+PERCORSO_OUTPUT = os.path.expanduser("~/Desktop")
+NUMERO_MASSIMO_TENTATIVI = 3  # Per generazione match bilanciati
+
+# =============================================
+# STRUTTURE DATI AVANZATE
+# =============================================
+class GestoreErrori:
+    @staticmethod
+    def carica_dati(file_path):
+        """Caricamento dati con gestione errori avanzata"""
+        for _ in range(NUMERO_MASSIMO_TENTATIVI):
+            try:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    data = json.load(file)
+                if not all(key in data for key in ["classifica", "cronologia"]):
+                    raise ValueError("Struttura JSON non valida")
+                return data["classifica"], data["cronologia"]
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                print(f"Errore: {str(e)} - Tentativo fallito")
+        raise SystemExit("Impossibile caricare i dati. Verificare il file JSON.")
+
+# =============================================
+# ALGORITMI OTTIMIZZATI
+# =============================================
+class GeneratoreMatch:
+    def __init__(self, classifica):
+        self.giocatori = [g["nome"] for g in classifica]
+        self.disponibilita = defaultdict(int)
+        
+    def _genera_match_validi(self):
+        """Generatore efficiente di match bilanciati"""
+        for compagni in itertools.combinations(self.giocatori, 2):
+            if self._squadra_valida(compagni):
+                yield from self._genera_avversari(compagni)
+    
+    def _genera_avversari(self, compagni):
+        """Genera avversari evitando conflitti"""
+        for avversari in itertools.combinations(
+            sorted(set(self.giocatori) - set(compagni), key=lambda x: self.disponibilita[x]), 
+            2
+        ):
+            if self._squadra_valida(avversari):
+                yield {
+                    "compagni": list(compagni),
+                    "avversari": list(avversari),
+                    "priorita": sum(self.disponibilita[g] for g in compagni + avversari)
+                }
+    
+    def _squadra_valida(self, squadra):
+        """Controllo avanzato regola 'Fiore'"""
+        return sum(1 for g in squadra if 'fiore' in g.lower()) <= 1
+
+    def genera_calendario(self):
+        """Algoritmo di scheduling bilanciato"""
+        calendario = {i: [] for i in range(7)}
+        match_generati = sorted(
+            self._genera_match_validi(), 
+            key=lambda x: x['priorita']
+        )
+        
+        for match in match_generati:
+            giorno = self._trova_giorno_ottimale(match)
+            if giorno is not None and len(calendario[giorno]) < MAX_MATCH_PER_GIORNO:
+                calendario[giorno].append(match)
+                for g in match['compagni'] + match['avversari']:
+                    self.disponibilita[g] += 1
+        return calendario
+    
+    def _trova_giorno_ottimale(self, match):
+        """Distribuzione intelligente per evitare sovrapposizioni"""
+        giorni_disponibili = list(range(7))
+        random.shuffle(giorni_disponibili)
+        for giorno in giorni_disponibili:
+            if all(
+                g not in calendario[giorno] 
+                for partita in calendario[giorno] 
+                for g in partita['compagni'] + partita['avversari']
+            ):
+                return giorno
+        return None
+
+# =============================================
+# GESTIONE PDF AVANZATA
+# =============================================
+class PDFGenerator(FPDF):
+    def __init__(self, giocatore):
+        super().__init__()
+        self.giocatore = giocatore
+        self.set_auto_page_break(auto=True, margin=15)
+        self.add_font('Arial', '', 'arial.ttf', uni=True)
+    
+    def header(self):
+        self.set_font('Arial', 'B', 16)
+        self.cell(0, 10, NOME_TORNEO, 0, 1, 'C')
+        self.set_font('Arial', '', 12)
+        self.cell(0, 10, "17-23 Marzo 2025", 0, 1, 'C')
+        self.ln(10)
+    
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Pagina {self.page_no()}', 0, 0, 'C')
+
+    def aggiungi_giorno(self, giorno, partite):
+        self.set_font('Arial', 'B', 12)
+        self.cell(0, 10, f"{GIORNI_SETTIMANA[giorno]} {(DATA_INIZIO + timedelta(days=giorno)).strftime('%d/%m')}", 0, 1)
+        self.set_font('Arial', '', 10)
+        
+        for idx, match in enumerate(partite[:MAX_MATCH_PER_GIORNO], 1):
+            testo = self._formatta_partita(match)
+            self.multi_cell(0, 8, f"{idx}. {testo}")
+            self.ln(2)
+        
+        if not partite:
+            self.multi_cell(0, 8, "Nessuna partita programmata")
+        self.ln(8)
+    
+    def _formatta_partita(self, match):
+        """Formattazione avanzata con mantenimento case originale"""
+        try:
+            squadra_utente = next(
+                (squadra for squadra in [match['compagni'], match['avversari']] 
+                 if self.giocatore in squadra),
+                None
+            )
+            
+            if not squadra_utente:
+                return f"{' + '.join(match['compagni'])} vs {' + '.join(match['avversari'])}"
+            
+            compagni = [g if g != self.giocatore else f"▶{g}◀" for g in squadra_utente]
+            avversari = match['avversari'] if squadra_utente == match['compagni'] else match['compagni']
+            return f"{' + '.join(compagni)} vs {' + '.join(avversari)}"
+        
+        except Exception as e:
+            return f"⚠️ Partita non disponibile - {str(e)}"
+
+# =============================================
+# ESECUZIONE PRINCIPALE OTTIMIZZATA
+# =============================================
+def main():
+    try:
+        # Caricamento dati con gestione errori
+        classifica, cronologia = GestoreErrori.carica_dati("data.json")
+        cronologia = correggi_cronologia(cronologia)
+        
+        # Generazione calendario avanzata
+        generatore = GeneratoreMatch(classifica)
+        calendario = generatore.genera_calendario()
+        
+        # Creazione PDF ottimizzata
+        for giocatore in classifica:
+            nome = giocatore["nome"]
+            pdf = PDFGenerator(nome)
+            pdf.add_page()
+            
+            for giorno in range(7):
+                pdf.aggiungi_giorno(giorno, calendario[giorno])
+            
+            # Aggiunta sezione prenotazioni
+            pdf.add_page()
+            pdf.set_font('Arial', 'I', 10)
+            pdf.multi_cell(0, 8, "** Sistema Prenotazioni **\nInvia SMS al 333 1234567\nFormato: PRENOTA <GIORNO> <NUMERO>")
+            
+            pdf.output(os.path.join(PERCORSO_OUTPUT, f"Calendario_{nome}.pdf"))
+            print(f"Generato: Calendario_{nome}.pdf")
+        
+        print("Processo completato con successo!")
+    
+    except Exception as e:
+        print(f"Errore critico: {str(e)}")
+        exit(1)
+
+if __name__ == "__main__":
+    main()
